@@ -86,86 +86,85 @@
     <span>Tip: you can only save when all required activities are complete. If anything’s missing, I’ll tell you why.</span>
   </footer>
 
+
+  <script src="firebase-config.js"></script>
   <!-- Firebase v10+ modular SDKs -->
   <script type="module">
-    // Replace with your Firebase project config
-    const firebaseConfig = {
-      apiKey: "AIzaSyDcIXEyvphhDBllSxBMunw_QVTW3X-IcOk",
-      authDomain: "hard-75-tracker.firebaseapp.com",
-      projectId: "hard-75-tracker",
-      storageBucket: "hard-75-tracker.firebasestorage.app",
-      messagingSenderId: "295957271580",
-      appId: "1:295957271580:web:25b3256343591dc1e03bd9"
-    };
-
-    import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
-    import { getAuth, onAuthStateChanged, GoogleAuthProvider, signInWithPopup, signOut } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
-    import { getFirestore, doc, getDoc, setDoc, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
-
-    const app = initializeApp(firebaseConfig);
+    // 1) Get config: local file first, then Firebase Hosting endpoint
+    async function getFirebaseConfig() {
+      if (window.FIREBASE_CONFIG) return window.FIREBASE_CONFIG;
+      try {
+        // Works on Firebase Hosting and the Hosting emulator
+        const res = await fetch('/__/firebase/init.json');
+        if (res.ok) return await res.json();
+      } catch {}
+      throw new Error('Firebase config not found. For local dev, create firebase-config.js.');
+    }
+  
+    const cfg = await getFirebaseConfig();
+  
+    // 2) Load SDKs (modular)
+    const { initializeApp } = await import('https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js');
+    const { getAuth, onAuthStateChanged, GoogleAuthProvider, signInWithPopup, signOut }
+      = await import('https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js');
+    const { getFirestore, doc, getDoc, setDoc, serverTimestamp, collection, onSnapshot, query, orderBy, limit, deleteDoc }
+      = await import('https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js');
+  
+    // 3) Init Firebase
+    const app = initializeApp(cfg);
     const auth = getAuth(app);
     const db = getFirestore(app);
-
+  
+    // 4) (Your existing auth UI wiring can stay the same; abbreviated here)
     const loginBtn = document.getElementById("loginBtn");
     const logoutBtn = document.getElementById("logoutBtn");
     const userLabel = document.getElementById("userLabel");
-
-    loginBtn.addEventListener("click", async () => {
-      const provider = new GoogleAuthProvider();
-      await signInWithPopup(auth, provider);
+  
+    loginBtn?.addEventListener("click", async () => {
+      await signInWithPopup(auth, new GoogleAuthProvider());
     });
-
-    logoutBtn.addEventListener("click", async () => {
-      await signOut(auth);
-    });
-
+    logoutBtn?.addEventListener("click", async () => { await signOut(auth); });
+  
+    // Submission log helpers (same as before)
+    const todayKey = () => new Date().toISOString().slice(0,10);
+    async function writeTodayLog({ complete }) {
+      const u = auth.currentUser; if (!u) return;
+      await setDoc(doc(db, "users", u.uid, "logs", todayKey()), {
+        date: todayKey(), complete: !!complete, savedAt: serverTimestamp()
+      }, { merge: true });
+    }
+    async function deleteTodayLog() {
+      const u = auth.currentUser; if (!u) return;
+      await deleteDoc(doc(db, "users", u.uid, "logs", todayKey()));
+    }
+    let unsubscribeLogs = null;
+    function attachLogListener(uid) {
+      if (unsubscribeLogs) unsubscribeLogs();
+      const q = query(collection(db, "users", uid, "logs"), orderBy("date","desc"), limit(100));
+      unsubscribeLogs = onSnapshot(q, snap => {
+        const rows = []; snap.forEach(d => rows.push(d.data()));
+        window.cloudLog = rows;
+        window.renderLog?.();
+      });
+    }
+  
     onAuthStateChanged(auth, async (user) => {
       if (user) {
         loginBtn.style.display = "none";
         logoutBtn.style.display = "inline-block";
         userLabel.textContent = `Signed in as ${user.displayName || user.email}`;
-
-        // Pull minimal cloud record and merge
-        const ref = doc(db, "users", user.uid);
-        const snap = await getDoc(ref);
-        const localLongest = Number(localStorage.getItem("hard75:longest") || 0);
-
-        if (snap.exists()) {
-          const data = snap.data();
-          const mergedLongest = Math.max(localLongest, Number(data.longestStreak || 0));
-          localStorage.setItem("hard75:longest", String(mergedLongest));
-          // current streak is time-sensitive; keep local calculation authoritative
-        } else {
-          // create a minimal doc on first login
-          await setDoc(ref, {
-            currentStreak: Number(document.querySelector("#currentStreak").textContent || 0),
-            longestStreak: localLongest,
-            lastCompletionDate: null,
-            updatedAt: serverTimestamp()
-          });
-        }
-
-        // recompute UI with possibly updated longest
-        if (window.computeStreaks) window.computeStreaks();
+        attachLogListener(user.uid);
       } else {
         loginBtn.style.display = "inline-block";
         logoutBtn.style.display = "none";
         userLabel.textContent = "";
+        unsubscribeLogs?.(); window.cloudLog = null; window.renderLog?.();
       }
     });
-
-    // expose a tiny helper to push streaks to cloud when they change
-    window.syncStreaksToCloud = async ({ currentStreak, longestStreak, lastCompletionDate }) => {
-      const u = auth.currentUser;
-      if (!u) return;
-      const ref = doc(db, "users", u.uid);
-      await setDoc(ref, {
-        currentStreak,
-        longestStreak,
-        lastCompletionDate: lastCompletionDate || null,
-        updatedAt: serverTimestamp()
-      }, { merge: true });
-    };
+  
+    // Expose hooks so script.js can mirror saves/resets to Firestore
+    window.syncLogWriteToday = writeTodayLog;
+    window.syncLogDeleteToday = deleteTodayLog;
   </script>
   <script src="script.js" defer></script>
 </body>
