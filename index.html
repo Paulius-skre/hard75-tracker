@@ -1,0 +1,172 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Hard 75 – Daily Tracker</title>
+  <link rel="stylesheet" href="style.css" />
+  <div id="authArea">
+    <button id="loginBtn" class="ghost">Sign in with Google</button>
+    <button id="logoutBtn" class="ghost" style="display:none;">Sign out</button>
+    <span id="userLabel" class="muted"></span>
+  </div>
+  <link rel="manifest" href="/manifest.webmanifest">
+    <meta name="theme-color" content="#0b0f14">
+    <link rel="apple-touch-icon" href="/assets/icon-192.png">
+    <script>
+  if ('serviceWorker' in navigator) {
+    window.addEventListener('load', () => navigator.serviceWorker.register('/service-worker.js'));
+  }
+</script>
+</head>
+<body>
+  <header class="app-header">
+    <h1>Hard 75 – Daily Tracker</h1>
+    <div id="dateDisplay" class="muted"></div>
+  </header>
+
+  <section id="statusBar" class="status-bar" aria-live="polite"></section>
+
+  <main class="container">
+    <section class="card">
+      <h2>Today’s Checklist</h2>
+      <form id="dailyForm">
+        <fieldset>
+          <legend class="sr-only">Required Activities</legend>
+          <label class="check">
+            <input type="checkbox" name="workout1" /> Workout 1 (45 min)
+          </label>
+          <label class="check">
+            <input type="checkbox" name="workout2" /> Workout 2 (45 min, outdoors)
+          </label>
+          <label class="check">
+            <input type="checkbox" name="diet" /> Followed Diet (no cheats, no alcohol)
+          </label>
+          <label class="check">
+            <input type="checkbox" name="photo" /> Progress Photo Taken
+          </label>
+          <label class="check">
+            <input type="checkbox" name="reading" /> Read 10+ pages
+          </label>
+        </fieldset>
+
+        <div class="water">
+          <label for="waterCups">Water Intake</label>
+          <div class="water-row">
+            <button type="button" id="decWater" aria-label="Remove one 400ml cup">–</button>
+            <output id="waterCups" for="decWater incWater">0</output>
+            <button type="button" id="incWater" aria-label="Add one 400ml cup">+</button>
+          </div>
+          <div class="muted">Target: 4L (10 × 400ml cups)</div>
+          <input type="hidden" name="waterCups" value="0" />
+        </div>
+
+        <div class="actions">
+          <button id="saveBtn" type="submit" class="primary">Save today</button>
+          <button id="resetBtn" type="button" class="ghost">Reset today</button>
+        </div>
+      </form>
+    </section>
+
+    <section class="card">
+      <h2>Your Streaks</h2>
+      <div class="streaks">
+        <div><strong>Current streak:</strong> <span id="currentStreak">0</span> days</div>
+        <div><strong>Longest streak:</strong> <span id="longestStreak">0</span> days</div>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>Submission Log</h2>
+      <ul id="logList" class="log"></ul>
+    </section>
+  </main>
+
+  <footer class="footer muted">
+    <span>Tip: you can only save when all required activities are complete. If anything’s missing, I’ll tell you why.</span>
+  </footer>
+
+  <!-- Firebase v10+ modular SDKs -->
+  <script type="module">
+    // Replace with your Firebase project config
+    const firebaseConfig = {
+      apiKey: "AIzaSyDcIXEyvphhDBllSxBMunw_QVTW3X-IcOk",
+      authDomain: "hard-75-tracker.firebaseapp.com",
+      projectId: "hard-75-tracker",
+      storageBucket: "hard-75-tracker.firebasestorage.app",
+      messagingSenderId: "295957271580",
+      appId: "1:295957271580:web:25b3256343591dc1e03bd9"
+    };
+
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
+    import { getAuth, onAuthStateChanged, GoogleAuthProvider, signInWithPopup, signOut } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
+    import { getFirestore, doc, getDoc, setDoc, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
+
+    const app = initializeApp(firebaseConfig);
+    const auth = getAuth(app);
+    const db = getFirestore(app);
+
+    const loginBtn = document.getElementById("loginBtn");
+    const logoutBtn = document.getElementById("logoutBtn");
+    const userLabel = document.getElementById("userLabel");
+
+    loginBtn.addEventListener("click", async () => {
+      const provider = new GoogleAuthProvider();
+      await signInWithPopup(auth, provider);
+    });
+
+    logoutBtn.addEventListener("click", async () => {
+      await signOut(auth);
+    });
+
+    onAuthStateChanged(auth, async (user) => {
+      if (user) {
+        loginBtn.style.display = "none";
+        logoutBtn.style.display = "inline-block";
+        userLabel.textContent = `Signed in as ${user.displayName || user.email}`;
+
+        // Pull minimal cloud record and merge
+        const ref = doc(db, "users", user.uid);
+        const snap = await getDoc(ref);
+        const localLongest = Number(localStorage.getItem("hard75:longest") || 0);
+
+        if (snap.exists()) {
+          const data = snap.data();
+          const mergedLongest = Math.max(localLongest, Number(data.longestStreak || 0));
+          localStorage.setItem("hard75:longest", String(mergedLongest));
+          // current streak is time-sensitive; keep local calculation authoritative
+        } else {
+          // create a minimal doc on first login
+          await setDoc(ref, {
+            currentStreak: Number(document.querySelector("#currentStreak").textContent || 0),
+            longestStreak: localLongest,
+            lastCompletionDate: null,
+            updatedAt: serverTimestamp()
+          });
+        }
+
+        // recompute UI with possibly updated longest
+        if (window.computeStreaks) window.computeStreaks();
+      } else {
+        loginBtn.style.display = "inline-block";
+        logoutBtn.style.display = "none";
+        userLabel.textContent = "";
+      }
+    });
+
+    // expose a tiny helper to push streaks to cloud when they change
+    window.syncStreaksToCloud = async ({ currentStreak, longestStreak, lastCompletionDate }) => {
+      const u = auth.currentUser;
+      if (!u) return;
+      const ref = doc(db, "users", u.uid);
+      await setDoc(ref, {
+        currentStreak,
+        longestStreak,
+        lastCompletionDate: lastCompletionDate || null,
+        updatedAt: serverTimestamp()
+      }, { merge: true });
+    };
+  </script>
+  <script src="script.js" defer></script>
+</body>
+</html>
