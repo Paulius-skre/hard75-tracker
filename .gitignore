@@ -1,11 +1,14 @@
-# macOS
-.DS_Store
-
-# Firebase
+# Firebase/VSCode/local
 .firebase/
-.firebasehosting.*
-# Node (if you ever add tooling)
+firebase-debug.log
+*.local
+# Build/OS/editor
+dist/
 node_modules/
-# Env files (if you ever add secrets)
+.DS_Store
+*.swp
+# Never commit admin/service creds
+serviceAccount*.json
+*.secret.*
 .env
-firebase-config.js
+.env.*

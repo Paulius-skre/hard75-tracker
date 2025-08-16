@@ -1,19 +1,17 @@
 // Hard 75 – vanilla JS tracker
 // Optimized for readability, modularity, and resilience.
 
-const STORAGE_KEY = "hard75:days";
-const LONGEST_KEY = "hard75:longest";
-
-
 (function () {
   "use strict";
+
+  // --- Constants ---
+  const STORAGE_KEY = "hard75:days";
+  const LONGEST_KEY = "hard75:longest";
 
   // --- Helpers ---
   const $ = (sel, root = document) => root.querySelector(sel);
   const $$ = (sel, root = document) => Array.from(root.querySelectorAll(sel));
-
   const todayKey = () => new Date().toISOString().slice(0, 10); // YYYY-MM-DD
-  const STORAGE_KEY = "hard75:days";
 
   /** Get all saved days as a map { 'YYYY-MM-DD': DayRecord } */
   function getAll() {
@@ -67,7 +65,8 @@ const LONGEST_KEY = "hard75:longest";
     const key = todayKey();
     const entry = getDay(key);
     const dateStr = new Date().toLocaleDateString(undefined, { weekday: "long", year: "numeric", month: "short", day: "numeric" });
-    $("#dateDisplay").textContent = dateStr;
+    const dateEl = $("#dateDisplay");
+    if (dateEl) dateEl.textContent = dateStr;
 
     if (!entry) {
       bar.innerHTML = `
@@ -90,6 +89,7 @@ const LONGEST_KEY = "hard75:longest";
   /** Populate today's form from storage */
   function loadToday() {
     const form = $("#dailyForm");
+    if (!form) return;
     const entry = getDay(todayKey());
     if (!entry) {
       form.reset();
@@ -107,76 +107,57 @@ const LONGEST_KEY = "hard75:longest";
   /** Update water UI */
   function setWater(cups) {
     cups = Math.max(0, Math.min(20, Number(cups) || 0)); // clamp 0..20 (8L hard cap)
-    $("input[name='waterCups']").value = String(cups);
-    $("#waterCups").value = String(cups);
-    $("#waterCups").textContent = String(cups);
+    const hidden = $("input[name='waterCups']");
+    const out = $("#waterCups");
+    if (hidden) hidden.value = String(cups);
+    if (out) {
+      out.value = String(cups);
+      out.textContent = String(cups);
+    }
   }
 
   /** Compute streaks */
   function computeStreaks() {
     const all = getAll();
-    const keys = Object.keys(all).filter(Boolean).sort(); // asc
-  
-    // ---- current streak (up to today) ----
+    const keys = Object.keys(all).filter(Boolean).sort();
+
+    // current streak ending today
     let current = 0;
-    const today = new Date(todayKey());
-    let d = new Date(today);
+    let d = new Date(new Date().toISOString().slice(0, 10));
     while (true) {
-      const k = d.toISOString().slice(0,10);
+      const k = d.toISOString().slice(0, 10);
       const e = all[k];
       if (e && e.complete) {
         current++;
         d.setDate(d.getDate() - 1);
       } else break;
     }
-  
-    // ---- longest streak found in saved per-day data ----
-    let longestFromData = 0;
-    let run = 0, prev = null;
+
+    // longest from saved per-day data
+    let longestFromData = 0, run = 0, prev = null;
     for (const k of keys) {
       const e = all[k];
       if (!(e && e.complete)) { run = 0; prev = null; continue; }
       if (!prev) { run = 1; prev = k; longestFromData = Math.max(longestFromData, run); continue; }
-      const prevDate = new Date(prev);
-      const currDate = new Date(k);
-      const diff = (currDate - prevDate) / (1000*60*60*24);
+      const diff = (new Date(k) - new Date(prev)) / 86400000;
       run = (diff === 1) ? run + 1 : 1;
-      prev = k;
-      if (run > longestFromData) longestFromData = run;
+      prev = k; longestFromData = Math.max(longestFromData, run);
     }
-  
-    // ---- all-time longest that never goes down ----
-    const storedLongest = Number(localStorage.getItem(LONGEST_KEY) || 0);
-    const longest = Math.max(storedLongest, longestFromData, current);
-  
-    // Persist only if we actually beat the stored record
-    if (longest > storedLongest) {
-      localStorage.setItem(LONGEST_KEY, String(longest));
-    }
-  
-    // Update UI
+
+    const stored = Number(localStorage.getItem(LONGEST_KEY) || 0);
+    const longest = Math.max(stored, longestFromData, current);
+    if (longest > stored) localStorage.setItem(LONGEST_KEY, String(longest));
+
     $("#currentStreak").textContent = String(current);
     $("#longestStreak").textContent = String(longest);
-    // after updating localStorage and before renderStatus()/computeStreaks()
-    const afterRecalc = () => {
-      computeStreaks();
-      const current = Number($("#currentStreak").textContent || 0);
-      const longest = Number($("#longestStreak").textContent || 0);
-      const lastCompletionDate = todayKey();
-      if (window.syncStreaksToCloud) {
-        window.syncStreaksToCloud({ currentStreak: current, longestStreak: longest, lastCompletionDate }).catch(()=>{});
-      }
-    };
   }
-
-showStatusMessage("Nice! All activities complete and your progress for today was saved.", "success");
-renderStatus();
-afterRecalc();
-renderLog();
 
   /** Render submission log */
   function renderLog() {
-    const list = $("#logList"); list.innerHTML = "";
+    const list = $("#logList"); 
+    if (!list) return;
+    list.innerHTML = "";
+
     const cloud = window.cloudLog;
     if (Array.isArray(cloud) && cloud.length) {
       for (const e of cloud) {
@@ -185,12 +166,15 @@ renderLog();
         badge.className = `badge ${e.complete ? "ok" : "miss"}`;
         badge.textContent = e.complete ? "Complete" : "Incomplete";
         li.innerHTML = `<strong>${e.date}</strong>`;
-        li.appendChild(badge); list.appendChild(li);
+        li.appendChild(badge);
+        list.appendChild(li);
       }
       return;
     }
+
     // fallback to local
-    const all = getAll(); const keys = Object.keys(all).sort().reverse();
+    const all = getAll();
+    const keys = Object.keys(all).sort().reverse();
     for (const k of keys) {
       const e = all[k];
       const li = document.createElement("li");
@@ -198,7 +182,8 @@ renderLog();
       badge.className = `badge ${e.complete ? "ok" : "miss"}`;
       badge.textContent = e.complete ? "Complete" : "Incomplete";
       li.innerHTML = `<strong>${k}</strong>`;
-      li.appendChild(badge); list.appendChild(li);
+      li.appendChild(badge);
+      list.appendChild(li);
     }
   }
 
@@ -224,47 +209,48 @@ renderLog();
   // --- Event wiring ---
   document.addEventListener("DOMContentLoaded", () => {
     const form = $("#dailyForm");
-    $("#incWater").addEventListener("click", () => setWater(Number($("input[name='waterCups']").value) + 1));
-    $("#decWater").addEventListener("click", () => setWater(Number($("input[name='waterCups']").value) - 1));
+    const inc = $("#incWater");
+    const dec = $("#decWater");
 
-    form.addEventListener("submit", (ev) => {
-      ev.preventDefault();
-      const reasons = missingReasons(form);
-      if (reasons.length > 0) {
-        // Feature 1: Block save + tell user why
-        const list = "<ul style='margin:.25rem 0 0 .75rem'>" + reasons.map(r => `<li>${r}</li>`).join("") + "</ul>";
-        showStatusMessage(`Progress was<strong> not saved </strong>because:<br>${list}`, "error");
-        return;
-      }
+    inc?.addEventListener("click", () => setWater(Number($("input[name='waterCups']").value) + 1));
+    dec?.addEventListener("click", () => setWater(Number($("input[name='waterCups']").value) - 1));
 
-      // All good – persist
-      const payload = readForm(form);
-      const record = {
-        ...payload,
-        complete: true,
-        savedAt: new Date().toISOString(),
-      };
-      saveDay(todayKey(), record);
-      if (window.syncLogWriteToday) window.syncLogWriteToday({ complete: true }).catch(()=>{});
-      showStatusMessage("Nice! All activities complete and your progress for today was saved.", "success");
-      renderStatus();
-      computeStreaks();
-      renderLog();
-    });
+    if (form) {
+      form.addEventListener("submit", (ev) => {
+        ev.preventDefault();
+        const reasons = missingReasons(form);
+        if (reasons.length > 0) {
+          const list = "<ul style='margin:.25rem 0 0 .75rem'>" + reasons.map(r => `<li>${r}</li>`).join("") + "</ul>";
+          showStatusMessage(`Progress was<strong> not saved </strong>because:<br>${list}`, "error");
+          return;
+        }
 
-    $("#resetBtn").addEventListener("click", () => {
-      removeDay(todayKey());
-      // Delete today from Firestore log if signed in
-      if (window.syncLogDeleteToday) {
-        window.syncLogDeleteToday().catch(()=>{});
-      }
-      form.reset();
-      setWater(0);
-      showStatusMessage("Today was reset. You can submit again when everything is complete.", "info");
-      renderStatus();
-      computeStreaks();
-      renderLog();
-    });
+        // All good – persist
+        const payload = readForm(form);
+        const record = {
+          ...payload,
+          complete: true,
+          savedAt: new Date().toISOString(),
+        };
+        saveDay(todayKey(), record);
+        if (window.syncLogWriteToday) window.syncLogWriteToday({ complete: true }).catch(()=>{});
+        showStatusMessage("Nice! All activities complete and your progress for today was saved.", "success");
+        renderStatus();
+        computeStreaks();
+        renderLog();
+      });
+
+      $("#resetBtn")?.addEventListener("click", () => {
+        removeDay(todayKey());
+        if (window.syncLogDeleteToday) window.syncLogDeleteToday().catch(()=>{});
+        form.reset();
+        setWater(0);
+        showStatusMessage("Today was reset. You can submit again when everything is complete.", "info");
+        renderStatus();
+        computeStreaks();
+        renderLog();
+      });
+    }
 
     // Initial paint
     renderStatus();
@@ -272,4 +258,8 @@ renderLog();
     computeStreaks();
     renderLog();
   });
+
+  // Expose for Firebase inline script
+  window.renderLog = renderLog;
+
 })();
