@@ -1,12 +1,15 @@
-const CACHE = 'hard75-v1';
-const ASSETS = ['/', '/index.html', '/style.css', '/script.js', '/manifest.webmanifest'];
+/* Minimal SW to enable PWA install + fast reloads */
+self.addEventListener("install", (e) => self.skipWaiting());
+self.addEventListener("activate", (e) => self.clients.claim());
 
-self.addEventListener('install', e => {
-  e.waitUntil(caches.open(CACHE).then(c => c.addAll(ASSETS)));
+// Optional: if you ever add notifications, this will focus an open client
+self.addEventListener("notificationclick", (event) => {
+  event.notification.close();
+  event.waitUntil((async () => {
+    const all = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
+    const client = all.find(c => "focus" in c);
+    if (client) return client.focus();
+    return self.clients.openWindow("/");
+  })());
 });
-self.addEventListener('activate', e => {
-  e.waitUntil(caches.keys().then(keys => Promise.all(keys.map(k => k !== CACHE && caches.delete(k)))));
-});
-self.addEventListener('fetch', e => {
-  e.respondWith(caches.match(e.request).then(r => r || fetch(e.request)));
-});
+
