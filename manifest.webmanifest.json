@@ -1,13 +1,14 @@
 {
-    "name": "Hard 75 – Daily Tracker",
-    "short_name": "Hard75",
-    "start_url": "/",
-    "display": "standalone",
-    "background_color": "#0b0f14",
-    "theme_color": "#0b0f14",
-    "icons": [
-      { "src": "/assets/icon-192.png", "sizes": "192x192", "type": "image/png" },
-      { "src": "/assets/icon-512.png", "sizes": "512x512", "type": "image/png" }
-    ]
-  }
-  
+  "name": "Hard 75 – Daily Tracker",
+  "short_name": "Hard 75",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#0b0f14",
+  "theme_color": "#0b0f14",
+  "icons": [
+    { "src": "/assets/icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "/assets/icon-512.png", "sizes": "512x512", "type": "image/png" }
+  ],
+  "launch_handler": { "client_mode": "focus-existing" }
+}
