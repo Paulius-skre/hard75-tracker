@@ -1,5 +1,8 @@
 {
   "projects": {
-    "default": "hard-75-tracker"
-  }
+    "default": "hard-75-tracker",
+    "prod": "hard-75-tracker"
+  },
+  "targets": {},
+  "etags": {}
 }

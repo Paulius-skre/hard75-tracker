@@ -17,7 +17,28 @@
 
   // --- Helpers ---
   const $ = (sel, root = document) => root.querySelector(sel);
-  const todayKey = () => new Date().toISOString().slice(0, 10); // YYYY-MM-DD
+  const pad = n => String(n).padStart(2, "0");
+  // Local (browser timezone) day key
+  const todayKey = (d = new Date()) => `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`; // YYYY-MM-DD
+  // Step a YYYY-MM-DD string back by N days
+  const keyMinusDays = (key, days = 1) => {
+    const [y, m, d] = key.split("-").map(Number);
+    const dt = new Date(y, m - 1, d);
+    dt.setDate(dt.getDate() - days);
+    return todayKey(dt);
+  };
+
+  // Save an incomplete snapshot of today's form (autosave)
+  function savePartial(form) {
+    const payload = readForm(form);
+    const record = { ...payload, complete: false, savedAt: new Date().toISOString() };
+    saveDay(todayKey(), record);
+    // If you later enable cloud partial-sync, uncomment:
+    // window.syncPartialToday?.(record);
+    renderStatus();
+    computeStreaks();
+    renderLog();
+  }
 
   function getAll() { try { return JSON.parse(localStorage.getItem(keyDays()) || "{}"); } catch { return {}; } }
   function setAll(obj) { localStorage.setItem(keyDays(), JSON.stringify(obj)); }
@@ -40,6 +61,7 @@
   // Prefer cloud (only if it matches this uid), else local
   function renderStatus() {
     const bar = $("#statusBar");
+    if (!bar) return;
     const key = todayKey();
     let entry = null;
 
@@ -76,7 +98,7 @@
     } else {
       bar.innerHTML = `
         <span class="badge miss">Incomplete</span>
-        <span style="margin-left:.5rem;">There’s an incomplete attempt saved for <strong>${key}</strong>. Consider resetting and re-saving.</span>
+        <span style="margin-left:.5rem;">There’s an incomplete attempt saved for <strong>${key}</strong>. Keep going — I’ll remember your progress.</span>
       `;
     }
   }
@@ -84,7 +106,11 @@
   function loadToday() {
     const form = $("#dailyForm");
     if (!form) return;
+
     const entry = getDay(todayKey());
+    // Only restore partial progress; if the day was submitted, start fresh.
+    if (entry && entry.complete === true) { form.reset(); setWater(0); return; }
+
     if (!entry) { form.reset(); setWater(0); return; }
     form.workout1.checked = !!entry.workout1;
     form.workout2.checked = !!entry.workout2;
@@ -105,62 +131,80 @@
   function computeStreaks() {
     const uid = currentUid();
 
-    if (Array.isArray(window.cloudLog) && window.cloudLogUid === uid) {
-      const completeSet = new Set(window.cloudLog.filter(e => e && e.complete && e.date).map(e => e.date));
-      let current = 0;
-      let d = new Date(new Date().toISOString().slice(0, 10));
-      while (true) {
-        const k = d.toISOString().slice(0, 10);
-        if (completeSet.has(k)) { current++; d.setDate(d.getDate() - 1); } else break;
+    // helpers to compute streaks from a set of YYYY-MM-DD strings
+    const calcCurrentFromSet = (completeSet) => {
+      const today = todayKey();
+      // find the last completed day <= today
+      const completedAsc = Array.from(completeSet).sort(); // asc
+      let last = null;
+      for (let i = completedAsc.length - 1; i >= 0; i--) {
+        if (completedAsc[i] <= today) { last = completedAsc[i]; break; }
       }
-      const datesAsc = Array.from(completeSet).sort();
-      let longestFromData = 0, run = 0, prev = null;
+      if (!last) return 0;
+      // count back consecutively from 'last'
+      let current = 0;
+      let k = last;
+      while (completeSet.has(k)) {
+        current++;
+        k = keyMinusDays(k, 1);
+      }
+      return current;
+    };
+
+    const calcLongestFromSet = (completeSet) => {
+      const datesAsc = Array.from(completeSet).sort(); // asc
+      let longest = 0, run = 0, prev = null;
       for (const k of datesAsc) {
-        if (!prev) run = 1;
-        else {
-          const diff = (new Date(k) - new Date(prev)) / 86400000;
-          run = (diff === 1) ? run + 1 : 1;
+        if (!prev) {
+          run = 1;
+        } else {
+          // consecutive if prev + 1 day === k
+          const nextOfPrev = keyMinusDays(k, 1);
+          run = (nextOfPrev === prev) ? run + 1 : 1;
         }
         prev = k;
-        if (run > longestFromData) longestFromData = run;
+        if (run > longest) longest = run;
       }
+      return longest;
+    };
+
+    // ---- Prefer cloud data if present for this uid ----
+    if (Array.isArray(window.cloudLog) && window.cloudLogUid === uid) {
+      const completeSet = new Set(
+        window.cloudLog.filter(e => e && e.complete && e.date).map(e => e.date)
+      );
+
+      const current = calcCurrentFromSet(completeSet);
+      const longestFromData = calcLongestFromSet(completeSet);
+
       const stored = Number(localStorage.getItem(keyLongest(uid)) || 0);
       const longest = Math.max(stored, longestFromData, current);
       if (longest > stored) localStorage.setItem(keyLongest(uid), String(longest));
 
-      document.getElementById("currentStreak").textContent = String(current);
-      document.getElementById("longestStreak").textContent = String(longest);
+      const cs = document.getElementById("currentStreak");
+      const ls = document.getElementById("longestStreak");
+      if (cs) cs.textContent = String(current);
+      if (ls) ls.textContent = String(longest);
       return;
     }
 
-    // fallback to local for this uid
+    // ---- Fallback to local cache for this uid ----
     const all = (() => { try { return JSON.parse(localStorage.getItem(keyDays(uid)) || "{}"); } catch { return {}; } })();
-    const keys = Object.keys(all).filter(Boolean).sort();
+    const completeSet = new Set(
+      Object.entries(all).filter(([, v]) => v && v.complete).map(([k]) => k)
+    );
 
-    let current = 0;
-    let d = new Date(new Date().toISOString().slice(0, 10));
-    while (true) {
-      const k = d.toISOString().slice(0, 10);
-      const e = all[k];
-      if (e && e.complete) { current++; d.setDate(d.getDate() - 1); } else break;
-    }
-
-    let longestFromData = 0, run = 0, prev = null;
-    for (const k of keys) {
-      const e = all[k];
-      if (!(e && e.complete)) { run = 0; prev = null; continue; }
-      if (!prev) { run = 1; prev = k; longestFromData = Math.max(longestFromData, run); continue; }
-      const diff = (new Date(k) - new Date(prev)) / 86400000;
-      run = (diff === 1) ? run + 1 : 1;
-      prev = k; longestFromData = Math.max(longestFromData, run);
-    }
+    const current = calcCurrentFromSet(completeSet);
+    const longestFromData = calcLongestFromSet(completeSet);
 
     const stored = Number(localStorage.getItem(keyLongest(uid)) || 0);
     const longest = Math.max(stored, longestFromData, current);
     if (longest > stored) localStorage.setItem(keyLongest(uid), String(longest));
 
-    document.getElementById("currentStreak").textContent = String(current);
-    document.getElementById("longestStreak").textContent = String(longest);
+    const cs = document.getElementById("currentStreak");
+    const ls = document.getElementById("longestStreak");
+    if (cs) cs.textContent = String(current);
+    if (ls) ls.textContent = String(longest);
   }
 
   function renderLog() {
@@ -200,6 +244,7 @@
 
   function showStatusMessage(html, type = "info") {
     const bar = document.getElementById("statusBar");
+    if (!bar) return;
     const color = type === "error" ? "var(--danger)" : type === "success" ? "var(--accent)" : "var(--accent-2)";
     bar.innerHTML = `<span style="font-weight:700; color:${color}; margin-right:.35rem;">${type.toUpperCase()}:</span>&nbsp;${html}`;
   }
@@ -220,11 +265,44 @@
     const inc = document.getElementById("incWater");
     const dec = document.getElementById("decWater");
 
-    inc?.addEventListener("click", () => setWater(Number(document.querySelector("input[name='waterCups']").value) + 1));
-    dec?.addEventListener("click", () => setWater(Number(document.querySelector("input[name='waterCups']").value) - 1));
+    // Live countdown (only if provided elsewhere)
+    if (typeof window.startCountdown === "function") {
+      window.startCountdown();
+    }
 
+    // Check day rollover every 30s (resets UI when date changes)
+    let lastKey = todayKey();
+    setInterval(() => {
+      const tk = todayKey();
+      if (tk !== lastKey) {
+        lastKey = tk;
+        form?.reset();
+        setWater(0);
+        showStatusMessage("A new day started — tracker reset for today.", "info");
+        renderStatus();
+        computeStreaks();
+        renderLog();
+      }
+    }, 30000);
+
+    // Water autosave
+    inc?.addEventListener("click", () => {
+      setWater(Number(document.querySelector("input[name='waterCups']").value) + 1);
+      if (form) savePartial(form);
+    });
+    dec?.addEventListener("click", () => {
+      setWater(Number(document.querySelector("input[name='waterCups']").value) - 1);
+      if (form) savePartial(form);
+    });
+
+    // Autosave on any required checkbox change
+    ["workout1","workout2","diet","photo","reading"].forEach(name => {
+      form?.elements[name]?.addEventListener("change", () => savePartial(form));
+    });
+
+    // Real sign-out button: visible reset + banner (auth.js also calls this on true sign-out)
     document.getElementById("logoutBtn")?.addEventListener("click", () => {
-      window.clearLocalTracker?.({ preserveUserCaches: true });
+      window.clearLocalTracker?.({ preserveUserCaches: true, force: true, silent: false });
     });
 
     if (form) {
@@ -236,12 +314,14 @@
           showStatusMessage(`Progress was<strong> not saved </strong>because:<br>${list}`, "error");
           return;
         }
-
         const payload = readForm(form);
         const record = { ...payload, complete: true, savedAt: new Date().toISOString() };
-        saveDay(todayKey(), record);                  // local (per-UID or guest)
-        window.syncLogWriteToday?.({ complete: true }).catch(()=>{}); // cloud if signed-in
+        saveDay(todayKey(), record);                  // local
+        window.syncLogWriteToday?.({ complete: true }).catch(()=>{});
         showStatusMessage("Nice! All activities complete and your progress for today was saved.", "success");
+        // Restart after successful submit
+        form.reset();
+        setWater(0);
         renderStatus();
         computeStreaks();
         renderLog();
@@ -264,6 +344,11 @@
     loadToday();
     computeStreaks();
     renderLog();
+
+    // Optional: single-tab presence
+    if (typeof window.setupSingleInstanceHints === "function") {
+      window.setupSingleInstanceHints();
+    }
   });
 
   // Expose helpers for auth.js
@@ -279,32 +364,48 @@
     } catch {}
   };
 
-  // Clear UI on sign-out; keep per-UID caches unless asked otherwise
-  window.clearLocalTracker = function ({ preserveUserCaches = true } = {}) {
+  /**
+   * Clear/refresh UI on sign-out or boot.
+   * Default: NON-DESTRUCTIVE + SILENT (keeps local progress).
+   * Use { force:true } for a real sign-out reset (e.g., Logout button).
+   */
+  window.clearLocalTracker = function ({ preserveUserCaches = true, force = false, silent = true } = {}) {
     try {
-      if (preserveUserCaches) {
-        // Only clear guest namespace
-        window.clearGuestCache();
-      } else {
-        // Full wipe
+      if (!preserveUserCaches) {
+        // Full wipe of all namespaces (explicit only)
         Object.keys(localStorage).forEach(k => { if (k.startsWith('hard75:')) localStorage.removeItem(k); });
       }
+      // IMPORTANT: we no longer auto-clear the guest namespace on boot/refresh.
     } catch {}
 
     const form = document.getElementById("dailyForm");
-    if (form) form.reset();
-    setWater(0);
 
-    window.cloudLog = null;
-    window.cloudLogUid = null;
+    if (force) {
+      // Real sign-out UX: reset visible UI
+      if (form) form.reset();
+      setWater(0);
 
-    document.getElementById("currentStreak").textContent = "0";
-    document.getElementById("longestStreak").textContent = "0";
+      window.cloudLog = null;
+      window.cloudLogUid = null;
 
-    renderStatus();
-    renderLog();
+      const cs = document.getElementById("currentStreak");
+      const ls = document.getElementById("longestStreak");
+      if (cs) cs.textContent = "0";
+      if (ls) ls.textContent = "0";
 
-    showStatusMessage("Signed out — local data cleared.", "info");
+      renderStatus();
+      renderLog();
+
+      if (!silent) {
+        showStatusMessage("Signed out — local data cleared from the view. Your per-user caches were preserved.", "info");
+      }
+    } else {
+      // Non-destructive boot/refresh: sync UI with stored state (no banner)
+      renderStatus();
+      loadToday();
+      computeStreaks();
+      renderLog();
+    }
   };
 
 })();

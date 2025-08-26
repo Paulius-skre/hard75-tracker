@@ -12,15 +12,17 @@
     await new Promise(res => document.addEventListener("DOMContentLoaded", res, { once: true }));
   }
 
-  // Config: local file first, then Hosting
+  // Prefer env loader (environment.js) -> legacy window.FIREBASE_CONFIG -> Hosting init.json
   async function getFirebaseConfig() {
-    if (window.FIREBASE_CONFIG && Object.keys(window.FIREBASE_CONFIG).length) return window.FIREBASE_CONFIG;
+    if (window.firebaseConfig) return window.firebaseConfig;           // NEW: env loader
+    if (window.FIREBASE_CONFIG && Object.keys(window.FIREBASE_CONFIG).length)
+      return window.FIREBASE_CONFIG;                                   // legacy local file
     try {
       const res = await fetch('/__/firebase/init.json', { cache: 'no-store' });
-      if (res.ok) return await res.json();
+      if (res.ok) return await res.json();                             // Firebase Hosting
     } catch {}
-    throw new Error("Firebase config not found. Load ./firebase-config.js locally, or run Hosting/emulator.");
-  }
+    throw new Error("Firebase config not found. Ensure environment.js loads a config file, or use Firebase Hosting init.json.");
+  }  
 
   let cfg;
   try { cfg = await getFirebaseConfig(); }
@@ -46,6 +48,14 @@
   const app = initializeApp(cfg);
   const auth = getAuth(app);
   const db = getFirestore(app);
+
+  // If you use emulators locally, guard by hostname (left commented to avoid changing behavior)
+  // if (location.hostname === "localhost") {
+  //   const { connectAuthEmulator } = await import("https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js");
+  //   const { connectFirestoreEmulator } = await import("https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js");
+  //   connectAuthEmulator(auth, "http://localhost:9099", { disableWarnings: true });
+  //   connectFirestoreEmulator(db, "localhost", 8080);
+  // }
 
   try { await getRedirectResult(auth); } catch {}
 
@@ -78,7 +88,8 @@
   });
 
   // Firestore helpers
-  const todayKey = () => new Date().toISOString().slice(0,10);
+  const pad = n => String(n).padStart(2,'0');
+  const todayKey = (d = new Date()) => `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`;
 
   async function writeTodayLog({ complete }) {
     const u = auth.currentUser; if (!u) return;
@@ -102,7 +113,7 @@
 
     const q = query(collection(db, "users", uid, "logs"), orderBy("date", "desc"), limit(100));
 
-    // --- PRELOAD once so UI updates immediately ---
+    // PRELOAD once so UI updates immediately
     try {
       const snap = await getDocs(q);
       const preRows = [];
@@ -116,7 +127,7 @@
       console.warn("Preload getDocs failed:", e);
     }
 
-    // --- Realtime updates ---
+    // Realtime updates
     unsubscribeLogs = onSnapshot(q, snap => {
       const rows = [];
       snap.forEach(d => rows.push(d.data()));
@@ -129,8 +140,12 @@
     });
   }
 
-  // Auth state → UI + namespace
+  // Auth state → UI + namespace (only show "Signed out" on a real sign-out)
   onAuthStateChanged(auth, (user) => {
+    const prev = localStorage.getItem('hard75:lastUid') || 'guest';
+    const next = user ? user.uid : 'guest';
+    const isRealSignOut = prev !== 'guest' && next === 'guest';
+
     if (user) {
       // Switch to user's namespace
       window.hard75UserId = user.uid;
@@ -143,9 +158,11 @@
       if (userLabel) userLabel.textContent = `Signed in`;
 
       // Paint from local (namespaced) immediately while cloud loads
-      document.getElementById("currentStreak").textContent = "0";
+      const cs = document.getElementById("currentStreak");
+      const ls = document.getElementById("longestStreak");
+      if (cs) cs.textContent = "0";
       const localLongest = Number(localStorage.getItem(`hard75:${user.uid}:longest`) || 0);
-      document.getElementById("longestStreak").textContent = String(localLongest);
+      if (ls) ls.textContent = String(localLongest);
 
       window.cloudLog = null;
       window.cloudLogUid = user.uid;
@@ -159,7 +176,7 @@
       preloadAndListen(user.uid);
       showStatus("Logged in successfully.", "success");
     } else {
-      // signed out
+      // guest / signed out
       window.hard75UserId = null;
 
       if (loginBtn)  loginBtn.style.display = "inline-block";
@@ -172,9 +189,16 @@
       window.cloudLog = null;
       window.cloudLogUid = null;
 
-      // Reset UI but KEEP per-UID caches (so users' data shows when they come back)
-      window.clearLocalTracker?.({ preserveUserCaches: true });
+      if (isRealSignOut) {
+        // Real sign-out: visible reset + banner (keeps per-UID caches)
+        window.clearLocalTracker?.({ preserveUserCaches: true, force: true, silent: false });
+      } else {
+        // First load / refresh as guest: NON-destructive + silent
+        window.clearLocalTracker?.({ preserveUserCaches: true, force: false, silent: true });
+      }
     }
+
+    localStorage.setItem('hard75:lastUid', next);
   });
 
   // expose hooks to script.js
