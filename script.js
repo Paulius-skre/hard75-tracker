@@ -134,16 +134,18 @@
     // helpers to compute streaks from a set of YYYY-MM-DD strings
     const calcCurrentFromSet = (completeSet) => {
       const today = todayKey();
-      // find the last completed day <= today
-      const completedAsc = Array.from(completeSet).sort(); // asc
-      let last = null;
-      for (let i = completedAsc.length - 1; i >= 0; i--) {
-        if (completedAsc[i] <= today) { last = completedAsc[i]; break; }
-      }
-      if (!last) return 0;
-      // count back consecutively from 'last'
+      const yday  = keyMinusDays(today, 1);
+
+      // Streak only continues if today OR yesterday is submitted.
+      // If neither is, the streak is broken => 0.
+      let start = null;
+      if (completeSet.has(today)) start = today;
+      else if (completeSet.has(yday)) start = yday;
+      else return 0;
+
+      // count back consecutively from 'start'
       let current = 0;
-      let k = last;
+      let k = start;
       while (completeSet.has(k)) {
         current++;
         k = keyMinusDays(k, 1);
